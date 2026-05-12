@@ -1,0 +1,35 @@
+# OfferScrapper
+
+Location-aware product offer scraper.
+
+## Inputs
+
+- `product_keyword` (required): category or search term like `shoes`
+- `country` (required): country name like `India` or `USA`
+- `pincode` (required): postal code for delivery filtering
+
+## Output fields
+
+For each selected best offer (one per brand):
+
+- `brand_name`
+- `product_title`
+- `best_available_price`
+- `original_price` (if available)
+- `source_website`
+- `source_url`
+- `delivery_availability`
+
+## Run
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 scraper.py "shoes" "USA" "90210" --pretty
+```
+
+## Notes
+
+- Uses multiple providers (`ebay.com`, `dummyjson.com`) for product discovery.
+- Handles pagination in each provider.
+- Applies retry + backoff for temporary rate-limit/server errors.
+- Filters out unavailable delivery entries and keeps only the lowest price per brand.
