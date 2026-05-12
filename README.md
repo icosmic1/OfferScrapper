@@ -1,4 +1,4 @@
-# OfferScrapper
+# OfferScraper
 
 Location-aware product offer scraper.
 

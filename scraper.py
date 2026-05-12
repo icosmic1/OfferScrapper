@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import logging
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -15,6 +16,7 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+MAX_BRAND_TOKENS = 4
 PINCODE_PATTERNS = {
     "india": r"^\d{6}$",
     "usa": r"^\d{5}(?:-\d{4})?$",
@@ -106,7 +108,9 @@ class DummyJsonProvider(BaseProvider):
                 brand = item.get("brand") or infer_brand(item.get("title", ""))
                 price = Decimal(str(item.get("price", 0)))
                 discount = Decimal(str(item.get("discountPercentage", 0)))
-                original_price = round(float(price / (Decimal("1") - (discount / Decimal("100")))), 2) if discount else None
+                original_price = None
+                if Decimal("0") < discount < Decimal("100"):
+                    original_price = round(float(price / (Decimal("1") - (discount / Decimal("100")))), 2)
                 offers.append(
                     Offer(
                         brand_name=brand,
@@ -190,7 +194,7 @@ def parse_first_price(text: str) -> float | None:
 def infer_brand(title: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9&'-]+", title)
     ignored = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
-    for token in tokens[:4]:
+    for token in tokens[:MAX_BRAND_TOKENS]:
         if len(token) > 1 and token.lower() not in ignored:
             return token
     return "Unknown"
@@ -218,7 +222,8 @@ def run(data: ScrapeInput, providers: list[BaseProvider]) -> list[Offer]:
     for provider in providers:
         try:
             collected.extend(provider.search(data, session))
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            logging.warning("Provider %s failed: %s", provider.name, exc)
             continue
 
     return best_price_per_brand(collected)
