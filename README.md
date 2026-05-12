@@ -29,7 +29,7 @@ python3 scraper.py "shoes" "India" "560001" --pretty
 
 ## Notes
 
-- Uses multiple providers (`ebay.in`, `dummyjson.com`) for product discovery.
+- Uses multiple providers (`nykaa.com`, `nykaaman.com`, `adidas.co.in`, `in.puma.com`, `reebok.in`, `ebay.in`, `dummyjson.com`) for product discovery.
 - Handles pagination in each provider.
 - Applies retry + backoff for temporary rate-limit/server errors.
 - Filters out unavailable delivery entries and keeps only the lowest price per brand.

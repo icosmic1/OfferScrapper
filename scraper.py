@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from typing import Callable, Iterable
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -154,6 +154,64 @@ class EbayProvider(BaseProvider):
         return offers
 
 
+class JsonLdSearchProvider(BaseProvider):
+    search_url_template = ""
+    page_size = 24
+    brand_override: str | None = None
+
+    def build_search_url(self, data: ScrapeInput, page: int) -> str:
+        return self.search_url_template.format(
+            query=quote_plus(data.product_keyword),
+            page=page,
+            offset=(page - 1) * self.page_size,
+            pincode=quote_plus(data.pincode),
+        )
+
+    def search(self, data: ScrapeInput, session: RateLimitedSession) -> list[Offer]:
+        offers: list[Offer] = []
+        for page in range(1, data.max_pages + 1):
+            url = self.build_search_url(data, page)
+            html = session.get(url).text
+            page_offers = parse_json_ld_offers(
+                html,
+                source_website=self.name,
+                source_url=url,
+                brand_override=self.brand_override,
+            )
+            if not page_offers:
+                break
+            offers.extend(page_offers)
+        return offers
+
+
+class NykaaProvider(JsonLdSearchProvider):
+    name = "nykaa.com"
+    search_url_template = "https://www.nykaa.com/search/result/?q={query}&page_no={page}"
+
+
+class NykaaManProvider(JsonLdSearchProvider):
+    name = "nykaaman.com"
+    search_url_template = "https://www.nykaaman.com/search/result/?q={query}&page_no={page}"
+
+
+class AdidasIndiaProvider(JsonLdSearchProvider):
+    name = "adidas.co.in"
+    search_url_template = "https://www.adidas.co.in/search?q={query}&start={offset}"
+    brand_override = "adidas"
+
+
+class PumaIndiaProvider(JsonLdSearchProvider):
+    name = "in.puma.com"
+    search_url_template = "https://in.puma.com/in/en/search?q={query}&start={offset}"
+    brand_override = "puma"
+
+
+class ReebokIndiaProvider(JsonLdSearchProvider):
+    name = "reebok.in"
+    search_url_template = "https://www.reebok.in/search?q={query}&start={offset}"
+    brand_override = "reebok"
+
+
 def parse_ebay_page(html: str) -> list[Offer]:
     soup = BeautifulSoup(html, "html.parser")
     offers: list[Offer] = []
@@ -190,6 +248,130 @@ def parse_ebay_page(html: str) -> list[Offer]:
             )
         )
     return offers
+
+
+def parse_json_ld_offers(
+    html: str,
+    *,
+    source_website: str,
+    source_url: str,
+    brand_override: str | None = None,
+) -> list[Offer]:
+    soup = BeautifulSoup(html, "html.parser")
+    offers: list[Offer] = []
+    seen: set[tuple[str, str]] = set()
+
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw = script.string or script.get_text(strip=True)
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        for product in iter_json_ld_products(payload):
+            title = str(product.get("name", "")).strip()
+            if not title:
+                continue
+
+            current_url = resolve_product_url(product.get("url"), source_url)
+            offer_blob = product.get("offers")
+            price = extract_price(offer_blob)
+            if price is None:
+                continue
+
+            original_price = extract_original_price(offer_blob, fallback=price)
+            brand_name = brand_override or extract_brand_name(product) or infer_brand(title)
+            key = (title.lower(), current_url.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            offers.append(
+                Offer(
+                    brand_name=brand_name,
+                    product_title=title,
+                    best_available_price=price,
+                    original_price=original_price,
+                    source_website=source_website,
+                    source_url=current_url,
+                    delivery_availability="available",
+                )
+            )
+    return offers
+
+
+def iter_json_ld_products(payload: object) -> Iterable[dict]:
+    if isinstance(payload, list):
+        for item in payload:
+            yield from iter_json_ld_products(item)
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    item_type = str(payload.get("@type", "")).lower()
+    if item_type == "product":
+        yield payload
+
+    if item_type == "itemlist":
+        for entry in payload.get("itemListElement", []) or []:
+            if isinstance(entry, dict):
+                candidate = entry.get("item", entry)
+                yield from iter_json_ld_products(candidate)
+
+    for value in payload.values():
+        if isinstance(value, (dict, list)):
+            yield from iter_json_ld_products(value)
+
+
+def extract_brand_name(product: dict) -> str | None:
+    brand = product.get("brand")
+    if isinstance(brand, dict):
+        value = brand.get("name")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if isinstance(brand, str) and brand.strip():
+        return brand.strip()
+    return None
+
+
+def extract_price(offer_blob: object) -> float | None:
+    for candidate in normalize_offer_candidates(offer_blob):
+        for key in ("price", "lowPrice", "highPrice"):
+            value = candidate.get(key)
+            if value is None:
+                continue
+            parsed = parse_first_price(str(value))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def extract_original_price(offer_blob: object, *, fallback: float) -> float | None:
+    for candidate in normalize_offer_candidates(offer_blob):
+        for key in ("highPrice", "listPrice", "priceBeforeDiscount"):
+            value = candidate.get(key)
+            if value is None:
+                continue
+            parsed = parse_first_price(str(value))
+            if parsed is not None and parsed > fallback:
+                return parsed
+    return None
+
+
+def normalize_offer_candidates(offer_blob: object) -> list[dict]:
+    if isinstance(offer_blob, dict):
+        return [offer_blob]
+    if isinstance(offer_blob, list):
+        return [item for item in offer_blob if isinstance(item, dict)]
+    return []
+
+
+def resolve_product_url(url: object, base_url: str) -> str:
+    if not isinstance(url, str) or not url.strip():
+        return base_url
+    return urljoin(base_url, url.strip())
 
 
 def parse_first_price(text: str) -> float | None:
@@ -257,7 +439,18 @@ def main() -> None:
         pincode=args.pincode,
         max_pages=max(1, args.max_pages),
     )
-    results = run(data, providers=[EbayProvider(), DummyJsonProvider()])
+    results = run(
+        data,
+        providers=[
+            NykaaProvider(),
+            NykaaManProvider(),
+            AdidasIndiaProvider(),
+            PumaIndiaProvider(),
+            ReebokIndiaProvider(),
+            EbayProvider(),
+            DummyJsonProvider(),
+        ],
+    )
     payload = [asdict(o) for o in results]
     print(json.dumps(payload, indent=2 if args.pretty else None))
 
