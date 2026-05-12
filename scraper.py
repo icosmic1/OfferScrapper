@@ -245,7 +245,7 @@ def run(data: ScrapeInput, providers: list[BaseProvider]) -> list[Offer]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find best priced branded product offers in India")
     parser.add_argument("product_keyword", type=str)
-    parser.add_argument("country", type=str)
+    parser.add_argument("country", type=str, help="Country (only India is supported)")
     parser.add_argument("pincode", type=str)
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--pretty", action="store_true", help="Pretty print JSON output")
