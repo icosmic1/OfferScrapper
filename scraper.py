@@ -21,10 +21,7 @@ MAX_BRAND_TOKENS = 4
 UNKNOWN_BRAND = "Unknown"
 CURRENCY_PRICE_PATTERN = r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)"
 IGNORED_BRAND_TOKENS = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
-PINCODE_PATTERNS = {
-    "india": r"^\d{6}$",
-    "usa": r"^\d{5}(?:-\d{4})?$",
-}
+INDIA_PINCODE_PATTERN = r"^\d{6}$"
 
 
 @dataclass
@@ -85,9 +82,11 @@ def validate_input(data: ScrapeInput) -> None:
         raise ValueError("product_keyword is required")
 
     country_key = data.country.strip().lower()
-    pattern = PINCODE_PATTERNS.get(country_key)
-    if pattern and not re.match(pattern, str(data.pincode).strip()):
-        raise ValueError(f"Invalid pincode format for {data.country}")
+    if country_key != "india":
+        raise ValueError("Only India is supported")
+
+    if not re.match(INDIA_PINCODE_PATTERN, str(data.pincode).strip()):
+        raise ValueError("Invalid pincode format for India")
 
 
 class BaseProvider:
@@ -137,13 +136,13 @@ class DummyJsonProvider(BaseProvider):
 
 
 class EbayProvider(BaseProvider):
-    name = "ebay.com"
+    name = "ebay.in"
 
     def search(self, data: ScrapeInput, session: RateLimitedSession) -> list[Offer]:
         offers: list[Offer] = []
         for page in range(1, data.max_pages + 1):
             url = (
-                "https://www.ebay.com/sch/i.html"
+                "https://www.ebay.in/sch/i.html"
                 f"?_nkw={quote_plus(data.product_keyword)}"
                 f"&_pgn={page}&_stpos={quote_plus(data.pincode)}"
             )
@@ -185,7 +184,7 @@ def parse_ebay_page(html: str) -> list[Offer]:
                 product_title=title,
                 best_available_price=price,
                 original_price=None,
-                source_website="ebay.com",
+                source_website="ebay.in",
                 source_url=link_el.get("href", "").strip(),
                 delivery_availability="unavailable" if unavailable else "available",
             )
@@ -241,9 +240,9 @@ def run(data: ScrapeInput, providers: list[BaseProvider]) -> list[Offer]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Find best priced branded product offers by location")
+    parser = argparse.ArgumentParser(description="Find best priced branded product offers in India")
     parser.add_argument("product_keyword", type=str)
-    parser.add_argument("country", type=str)
+    parser.add_argument("country", type=str, help="Country (only India is supported)")
     parser.add_argument("pincode", type=str)
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--pretty", action="store_true", help="Pretty print JSON output")
