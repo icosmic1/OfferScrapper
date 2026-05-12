@@ -21,9 +21,7 @@ MAX_BRAND_TOKENS = 4
 UNKNOWN_BRAND = "Unknown"
 CURRENCY_PRICE_PATTERN = r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)"
 IGNORED_BRAND_TOKENS = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
-PINCODE_PATTERNS = {
-    "india": r"^\d{6}$",
-}
+INDIA_PINCODE_PATTERN = r"^\d{6}$"
 
 
 @dataclass
@@ -85,10 +83,9 @@ def validate_input(data: ScrapeInput) -> None:
 
     country_key = data.country.strip().lower()
     if country_key != "india":
-        raise ValueError("Only India is supported. Please set country to India")
+        raise ValueError("Only India is supported")
 
-    pattern = PINCODE_PATTERNS["india"]
-    if not re.match(pattern, str(data.pincode).strip()):
+    if not re.match(INDIA_PINCODE_PATTERN, str(data.pincode).strip()):
         raise ValueError("Invalid pincode format for India")
 
 
