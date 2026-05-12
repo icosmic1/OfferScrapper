@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import Callable, Iterable
 from urllib.parse import quote_plus
 
@@ -17,6 +18,8 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 MAX_BRAND_TOKENS = 4
+UNKNOWN_BRAND = "Unknown"
+CURRENCY_PRICE_PATTERN = r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)"
 IGNORED_BRAND_TOKENS = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
 PINCODE_PATTERNS = {
     "india": r"^\d{6}$",
@@ -65,7 +68,13 @@ class RateLimitedSession:
                 return response
             if attempt < retries - 1:
                 retry_after = response.headers.get("Retry-After")
-                pause = float(retry_after) if retry_after and retry_after.isdigit() else backoff * (2 ** attempt)
+                pause = backoff * (2 ** attempt)
+                if retry_after:
+                    try:
+                        pause = float(retry_after)
+                    except ValueError:
+                        parsed = parsedate_to_datetime(retry_after)
+                        pause = max((parsed.timestamp() - time.time()), 0.0)
                 time.sleep(pause)
         response.raise_for_status()
         return response
@@ -185,7 +194,7 @@ def parse_ebay_page(html: str) -> list[Offer]:
 
 
 def parse_first_price(text: str) -> float | None:
-    match = re.search(r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)", text)
+    match = re.search(CURRENCY_PRICE_PATTERN, text)
     if not match:
         match = re.search(r"([\d,]+(?:\.\d{1,2})?)", text)
     if not match:
@@ -199,7 +208,7 @@ def infer_brand(title: str) -> str:
         cleaned = re.sub(r"['’]s$", "", token).strip("&'’")
         if len(cleaned) > 1 and cleaned.lower() not in IGNORED_BRAND_TOKENS:
             return cleaned
-    return "Unknown"
+    return UNKNOWN_BRAND
 
 
 def best_price_per_brand(offers: Iterable[Offer]) -> list[Offer]:
@@ -208,7 +217,7 @@ def best_price_per_brand(offers: Iterable[Offer]) -> list[Offer]:
         if offer.delivery_availability != "available":
             continue
 
-        key = (offer.brand_name or "").strip().lower() or "unknown"
+        key = (offer.brand_name or UNKNOWN_BRAND).strip().lower() or UNKNOWN_BRAND.lower()
         existing = by_brand.get(key)
         if existing is None or offer.best_available_price < existing.best_available_price:
             by_brand[key] = offer
