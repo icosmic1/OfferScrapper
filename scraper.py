@@ -17,6 +17,7 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 MAX_BRAND_TOKENS = 4
+IGNORED_BRAND_TOKENS = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
 PINCODE_PATTERNS = {
     "india": r"^\d{6}$",
     "usa": r"^\d{5}(?:-\d{4})?$",
@@ -110,7 +111,7 @@ class DummyJsonProvider(BaseProvider):
                 discount = Decimal(str(item.get("discountPercentage", 0)))
                 original_price = None
                 if Decimal("0") < discount < Decimal("100"):
-                    original_price = round(float(price / (Decimal("1") - (discount / Decimal("100")))), 2)
+                    original_price = float(round(price / (Decimal("1") - (discount / Decimal("100"))), 2))
                 offers.append(
                     Offer(
                         brand_name=brand,
@@ -193,9 +194,8 @@ def parse_first_price(text: str) -> float | None:
 
 def infer_brand(title: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9&'-]+", title)
-    ignored = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
     for token in tokens[:MAX_BRAND_TOKENS]:
-        if len(token) > 1 and token.lower() not in ignored:
+        if len(token) > 1 and token.lower() not in IGNORED_BRAND_TOKENS:
             return token
     return "Unknown"
 
@@ -206,7 +206,7 @@ def best_price_per_brand(offers: Iterable[Offer]) -> list[Offer]:
         if offer.delivery_availability != "available":
             continue
 
-        key = offer.brand_name.strip().lower() or "unknown"
+        key = (offer.brand_name or "Unknown").strip().lower() or "unknown"
         existing = by_brand.get(key)
         if existing is None or offer.best_available_price < existing.best_available_price:
             by_brand[key] = offer
