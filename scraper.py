@@ -22,6 +22,9 @@ UNKNOWN_BRAND = "Unknown"
 CURRENCY_PRICE_PATTERN = r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)"
 IGNORED_BRAND_TOKENS = {"new", "men", "women", "for", "with", "and", "the", "unisex", "official"}
 INDIA_PINCODE_PATTERN = r"^\d{6}$"
+AVAILABLE_AVAILABILITY_TOKENS = {"instock", "preorder", "limitedavailability"}
+UNAVAILABLE_AVAILABILITY_TOKENS = {"outofstock", "soldout", "discontinued"}
+DEFAULT_DELIVERY_AVAILABILITY = "unknown"
 
 
 @dataclass
@@ -164,7 +167,6 @@ class JsonLdSearchProvider(BaseProvider):
             query=quote_plus(data.product_keyword),
             page=page,
             offset=(page - 1) * self.page_size,
-            pincode=quote_plus(data.pincode),
         )
 
     def search(self, data: ScrapeInput, session: RateLimitedSession) -> list[Offer]:
@@ -281,7 +283,8 @@ def parse_json_ld_offers(
             if price is None:
                 continue
 
-            original_price = extract_original_price(offer_blob, fallback=price)
+            original_price = extract_original_price(offer_blob, current_price=price)
+            delivery_availability = extract_delivery_availability(offer_blob)
             brand_name = brand_override or extract_brand_name(product) or infer_brand(title)
             key = (title.lower(), current_url.lower())
             if key in seen:
@@ -295,7 +298,7 @@ def parse_json_ld_offers(
                     original_price=original_price,
                     source_website=source_website,
                     source_url=current_url,
-                    delivery_availability="available",
+                    delivery_availability=delivery_availability,
                 )
             )
     return offers
@@ -315,7 +318,7 @@ def iter_json_ld_products(payload: object) -> Iterable[dict]:
         yield payload
 
     if item_type == "itemlist":
-        for entry in payload.get("itemListElement", []) or []:
+        for entry in payload.get("itemListElement", []):
             if isinstance(entry, dict):
                 candidate = entry.get("item", entry)
                 yield from iter_json_ld_products(candidate)
@@ -348,14 +351,14 @@ def extract_price(offer_blob: object) -> float | None:
     return None
 
 
-def extract_original_price(offer_blob: object, *, fallback: float) -> float | None:
+def extract_original_price(offer_blob: object, *, current_price: float) -> float | None:
     for candidate in normalize_offer_candidates(offer_blob):
         for key in ("highPrice", "listPrice", "priceBeforeDiscount"):
             value = candidate.get(key)
             if value is None:
                 continue
             parsed = parse_first_price(str(value))
-            if parsed is not None and parsed > fallback:
+            if parsed is not None and parsed > current_price:
                 return parsed
     return None
 
@@ -372,6 +375,21 @@ def resolve_product_url(url: object, base_url: str) -> str:
     if not isinstance(url, str) or not url.strip():
         return base_url
     return urljoin(base_url, url.strip())
+
+
+def extract_delivery_availability(offer_blob: object) -> str:
+    for candidate in normalize_offer_candidates(offer_blob):
+        value = str(candidate.get("availability", "")).strip().lower()
+        if not value:
+            continue
+        parts = [part for part in re.split(r"[#/]", value) if part]
+        canonical = parts[-1] if parts else value
+        normalized = re.sub(r"[^a-z0-9]+", "", canonical)
+        if normalized in AVAILABLE_AVAILABILITY_TOKENS:
+            return "available"
+        if normalized in UNAVAILABLE_AVAILABILITY_TOKENS:
+            return "unavailable"
+    return DEFAULT_DELIVERY_AVAILABILITY
 
 
 def parse_first_price(text: str) -> float | None:
@@ -395,7 +413,7 @@ def infer_brand(title: str) -> str:
 def best_price_per_brand(offers: Iterable[Offer]) -> list[Offer]:
     by_brand: dict[str, Offer] = {}
     for offer in offers:
-        if offer.delivery_availability != "available":
+        if offer.delivery_availability == "unavailable":
             continue
 
         key = (offer.brand_name or UNKNOWN_BRAND).strip().lower() or UNKNOWN_BRAND.lower()

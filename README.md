@@ -18,7 +18,7 @@ For each selected best offer (one per brand):
 - `original_price` (if available)
 - `source_website`
 - `source_url`
-- `delivery_availability`
+- `delivery_availability` (`available`, `unavailable`, or `unknown`)
 
 ## Run
 
