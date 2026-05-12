@@ -50,7 +50,7 @@ class RateLimitedSession:
         self.min_interval = 1.0 / max(requests_per_second, 0.1)
         self._last_request_at = 0.0
 
-    def get(self, url: str, *, timeout: int = 20) -> requests.Response:
+    def get(self, url: str, *, timeout: float = 20.0) -> requests.Response:
         wait_time = self.min_interval - (time.time() - self._last_request_at)
         if wait_time > 0:
             time.sleep(wait_time)
@@ -65,7 +65,7 @@ class RateLimitedSession:
                 return response
             if attempt < retries - 1:
                 retry_after = response.headers.get("Retry-After")
-                pause = float(retry_after) if retry_after and retry_after.isdigit() else backoff ** attempt
+                pause = float(retry_after) if retry_after and retry_after.isdigit() else backoff * (2 ** attempt)
                 time.sleep(pause)
         response.raise_for_status()
         return response
@@ -111,7 +111,8 @@ class DummyJsonProvider(BaseProvider):
                 discount = Decimal(str(item.get("discountPercentage", 0)))
                 original_price = None
                 if Decimal("0") < discount < Decimal("100"):
-                    original_price = float(round(price / (Decimal("1") - (discount / Decimal("100"))), 2))
+                    discount_multiplier = Decimal("1") - (discount / Decimal("100"))
+                    original_price = float(round(price / discount_multiplier, 2))
                 offers.append(
                     Offer(
                         brand_name=brand,
@@ -184,7 +185,7 @@ def parse_ebay_page(html: str) -> list[Offer]:
 
 
 def parse_first_price(text: str) -> float | None:
-    match = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", text)
+    match = re.search(r"[$€£₹]\s*([\d,]+(?:\.\d{1,2})?)", text)
     if not match:
         match = re.search(r"([\d,]+(?:\.\d{1,2})?)", text)
     if not match:
@@ -195,8 +196,9 @@ def parse_first_price(text: str) -> float | None:
 def infer_brand(title: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9&'-]+", title)
     for token in tokens[:MAX_BRAND_TOKENS]:
-        if len(token) > 1 and token.lower() not in IGNORED_BRAND_TOKENS:
-            return token
+        cleaned = re.sub(r"['’]s$", "", token).strip("&'’")
+        if len(cleaned) > 1 and cleaned.lower() not in IGNORED_BRAND_TOKENS:
+            return cleaned
     return "Unknown"
 
 
@@ -206,7 +208,7 @@ def best_price_per_brand(offers: Iterable[Offer]) -> list[Offer]:
         if offer.delivery_availability != "available":
             continue
 
-        key = (offer.brand_name or "Unknown").strip().lower() or "unknown"
+        key = (offer.brand_name or "").strip().lower() or "unknown"
         existing = by_brand.get(key)
         if existing is None or offer.best_available_price < existing.best_available_price:
             by_brand[key] = offer
